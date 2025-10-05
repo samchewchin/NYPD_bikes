@@ -1,0 +1,133 @@
+---
+title: "datawrangle_NYPDbikes"
+author: "Sam Chew Chin"
+date: "2025-10-02"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+
+
+
+
+```
+# Read in data
+```{r}
+#raw
+rawdat<-read_csv("data/crashdata.csv")
+  
+spec(rawdat)
+
+```
+
+
+```{r rename}
+
+#rename and reformat key variables
+
+crashdat<-rawdat%>%
+  mutate(date=mdy(`CRASH DATE`))%>%
+  relocate(date)%>%
+  rename(time=`CRASH TIME`, 
+         lat=LATITUDE,
+         lon=LONGITUDE,
+         street=`ON STREET NAME`,
+         cross=`CROSS STREET NAME`,
+         cycle_inj=`NUMBER OF CYCLIST INJURED`,
+         cycle_kill=`NUMBER OF CYCLIST KILLED`)
+
+
+#filter out missing coords, date
+crashfilt<-crashdat%>%
+    filter(!is.na(lat), 
+           !is.na(lon), 
+           !is.na(date),
+           lon!=0,
+           lat!=0)
+
+#rejected data
+
+```
+
+```{r review}
+
+# review
+crashfilt%>%
+  select(date)%>%
+  summary()
+
+
+crashfilt%>%
+  filter(lon==0)
+
+
+```
+
+
+
+
+
+```{r app filter}
+#strip down to minimal for shiny app
+appdat<-crashfilt%>%
+  select(date, time, lat, lon, injured=cycle_inj, killed=cycle_kill, street, cross)
+
+write_csv(appdat, "data/appdata.csv")
+
+
+dddd<-read_csv("data/appdata.csv")
+
+
+```
+
+
+```{r dummy data}
+
+dff<-data.frame(
+    lon = runif(200, -73.99, -73.90),
+    lat = runif(200, 40.70, 40.80),
+    injured = sample(0:3, 200, replace = TRUE),
+    killed = sample(0:1, 200, replace = TRUE),
+    date = Sys.Date() - sample(1:365, 200, replace = TRUE),
+    time = sprintf("%02d:%02d", sample(0:23,200,replace=TRUE), sample(0:59,200,replace=TRUE)))
+
+
+```
+
+
+```{r check data}
+
+appdat%>%
+  mutate(month=month(date))%>%
+  group_by(month)%>%
+
+
+```
+
+
+# Static maps
+
+
+```{r maps}
+
+library(sf)
+
+# assuming your data is in a data.frame called df
+# with columns lat, lon, injured, killed
+
+
+map_df<-appdat
+
+# convert to sf object
+df_sf <- st_as_sf(map_df, coords = c("lon", "lat"), crs = 4326)
+
+ggplot() +
+  geom_sf(data = df_sf[map_df$injured > 0,], aes(color = "Injury"), alpha = 0.7, size = 2) +
+  geom_sf(data = df_sf[map_df$killed > 0,], aes(color = "Fatality"), alpha = 0.9, size = 3, shape = 4) +
+  scale_color_manual(values = c("Injury" = "limegreen", "Fatality" = "hotpink")) +
+  theme_minimal() +
+  theme(panel.background = element_rect(fill = "black"))
+
+```
