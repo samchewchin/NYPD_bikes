@@ -8,6 +8,8 @@ output: html_document
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE)
 library(tidyverse)
+library(stringr)
+library(tools)
 
 
 
@@ -72,14 +74,40 @@ crashfilt%>%
 ```{r app filter}
 #strip down to minimal for shiny app
 appdat<-crashfilt%>%
-  select(date, time, lat, lon, injured=cycle_inj, killed=cycle_kill, street, cross)
+  select(date, time, lat, lon, injured=cycle_inj, killed=cycle_kill, street, cross)%>%
+ mutate(
+    date  = as.Date(date),
+    month = as.numeric(format(date, "%m")),
+    fancydate = as.character(format(date, "%b %d, %Y")
+      )) %>%
+  mutate(
+    # Clean and title-case street names
+    street = street %>%
+      str_trim() %>%
+      na_if("") %>%
+      str_to_title(),
+    
+    cross = cross %>%
+      str_trim() %>%
+      na_if("") %>%
+      str_to_title()
+  ) %>%
+  mutate(
+    popup_label = sprintf(
+      "<b>Date:</b> %s<br><b>Injured:</b> %d<br><b>Killed:</b> %d%s%s",
+      fancydate,
+      injured,
+      killed,
+      ifelse(street != "", paste0("<br><b>Street:</b> ", street), ""),
+      ifelse(cross != "", paste0("<br><b>Cross:</b> ", cross), "")
+    )
+  )
 
-write_csv(appdat, "data/appdata.csv")
+# Save final dataset
+appdata <- appdat %>%
+  select(date, month, lon, lat, injured, killed, popup_label)
 
-
-dddd<-read_csv("data/appdata.csv")
-
-
+write.csv(appdata, "NYPD_Bike_DataDashboard/appdata.csv", row.names = FALSE)
 ```
 
 
@@ -98,10 +126,27 @@ dff<-data.frame(
 
 
 ```{r check data}
-
+#avg injuries per month
 appdat%>%
-  mutate(month=month(date))%>%
+  mutate(month=month(date), year=year(date))%>%
+  group_by(month, year)%>%
+  summarise(sum_inj =sum(injured))%>%
+  ungroup()%>%
   group_by(month)%>%
+  summarise(mean_inj=mean(sum_inj))
+
+
+```
+
+```{r check data}
+#avg kill per month
+appdat%>%
+  mutate(month=month(date), year=year(date))%>%
+  group_by(month, year)%>%
+  summarise(sum_kill =sum(killed))%>%
+  ungroup()%>%
+  group_by(month)%>%
+  summarise(mean_kill=mean(sum_kill))
 
 
 ```
