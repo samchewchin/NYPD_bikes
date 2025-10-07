@@ -1,0 +1,582 @@
+---
+title: "Graphics"
+author: "Sam Chew Chin"
+date: "2025-10-06"
+output: html_document
+---
+# setup
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(tidyverse)
+library(stringr)
+library(tools)
+library(lubridate)
+library(zoo)   # for rollmean
+library(sf)
+library(ggspatial)   # for scale bar and north arrow
+library(viridis)     # for color gradients
+library(prettymapr)
+library(scales)       # comma() etc. if needed
+
+```
+
+
+# Read in data and lengthen
+```{r read in and long format} 
+
+filtered<-read_csv("data/crashfilt.csv")%>%
+  select(date, time, lat, lon, injured=cycle_inj, killed=cycle_kill, street, cross)
+
+
+filt_long<-filtered%>%
+  select(date,lon, lat, injured, killed)%>%
+  pivot_longer(cols = c(injured, killed), names_to = "type")
+
+
+rejected<-read_csv("data/crashrej.csv")%>%
+  select(date, time, lat, lon, injured=cycle_inj, killed=cycle_kill, street, cross)
+
+
+rej_long<-rejected%>%
+  select(date, injured, killed)%>%
+  pivot_longer(cols = c(injured, killed), names_to = "type")
+
+```
+# Theme definitions
+```{r themes}
+map_themes <- list(
+  Dark = list(
+    # map tile (ggspatial annotation_map_tile uses 'cartodark' / 'cartolight' names)
+    tile_type    = "cartodark",        # CartoDB.DarkMatter (dark tiles)
+    # plot colors
+    bg           = "#121212",          # plot background
+    land         = "#222222",          # panel/land color (if drawing a filled land layer)
+    text         = "#FFFFAA",
+    injury_point = "#39ff14",          # neon-ish (you can change)
+    fatal_point  = "#ff69b4",
+    # heatmap palettes: prefer viridis options for dark theme:
+    injury_heat_option = "inferno",    # viridis option name
+    fatal_heat_option  = "rocket"      # viridis option name
+  ),
+  Mets = list(
+    tile_type    = "cartolight",       # CartoDB.Positron equivalent in ggspatial
+    bg           = "#f2f2f2",
+    land         = "#ececec",
+    text         = "#002D72",          # Mets blue for labels if desired
+    injury_point = "#FF5910",          # Mets orange
+    fatal_point  = "#002D72",          # Mets blue
+    # For baseball themes we'll use a custom two-color gradient (light -> team color)
+    injury_heat_low = "#FFECD8", injury_heat_high = "#FF5910",
+    fatal_heat_low  = "#DDE9FB", fatal_heat_high  = "#002D72"
+  ),
+  Yankees = list(
+    tile_type    = "cartolight",
+    bg           = "#f8f9fa",
+    land         = "#e9ecef",
+    text         = "#001C43",
+    injury_point = "#001C43",
+    fatal_point  = "#E8002F",
+    injury_heat_low = "#E8F0FB", injury_heat_high = "#001C43",
+    fatal_heat_low  = "#FFE9EB", fatal_heat_high  = "#E8002F"
+  )
+)
+```
+
+# monthly totals
+
+```{r }
+
+# --- Aggregate monthly totals ---
+
+##filtered
+filt_monthly <- filt_long %>%
+  mutate(month = floor_date(date, "month")) %>%
+  group_by(month, type) %>%
+  summarise(total = sum(value, na.rm = TRUE), .groups = "drop") %>%
+  arrange(type, month) %>%
+  group_by(type) %>%
+  mutate(roll6 = zoo::rollmean(total, k = 6, fill = NA, align = "right")) %>%
+  ungroup()
+
+
+## rejected
+rej_monthly <- rej_long %>%
+  mutate(month = floor_date(date, "month"), year= year(date)) %>%
+  group_by(year, month, type) %>%
+  summarise(total = sum(value, na.rm = TRUE), .groups = "drop") %>%
+  arrange(type, month) %>%
+  group_by(type) %>%
+  mutate(roll6 = zoo::rollmean(total, k = 6, fill = NA, align = "right")) %>%
+  ungroup()
+
+
+```
+# all month bar plots
+## filtered
+``` {r filt bar}
+
+# --- Faceted bar plot with rolling mean overlay ---
+
+bardat<-filt_monthly
+
+
+# Assume `theme_choice` is one of "Dark", "Mets", "Yankees"
+theme_choice <- "Yankees"
+th <- map_themes[[theme_choice]]
+
+ggplot(bardat, aes(x = month, y = total, fill = type)) +
+  geom_col(width = 25, alpha = 0.75) +
+  geom_line(aes(y = roll6, color = type), linewidth = 1.1) +
+  facet_wrap(~type, scales = "free_y", ncol = 1, strip.position = "top") +
+  scale_fill_manual(values = c(
+    "injured" = th$injury_point,
+    "killed"  = th$fatal_point
+  )) +
+  scale_color_manual(values = c(
+    "injured" = th$injury_point,
+    "killed"  = th$fatal_point
+  )) +
+  scale_x_date(
+    date_breaks = "1 year",
+    date_labels = "%Y"
+  ) +
+  labs(
+    title = "Filtered Data: Monthly Cyclist Injuries and Fatalities in NYC",
+    subtitle = "Bars show monthly totals; lines show 6-month rolling means",
+    x = "Year",
+    y = "Cyclists per Month"
+  ) +
+  theme_minimal() +
+  theme(
+    plot.background  = element_rect(fill = th$bg, color = NA),
+    panel.background = element_rect(fill = th$bg, color = NA),
+    panel.grid.major  = element_line(color = scales::alpha(th$text, 0.2)),
+    panel.grid.minor  = element_blank(),
+    strip.background  = element_rect(fill = scales::alpha(th$bg, 0.5), color = NA),
+    strip.text        = element_text(face = "bold", size = 12, color = th$text),
+    axis.text         = element_text(color = th$text, size = 9),
+    axis.title        = element_text(color = th$text),
+    plot.title        = element_text(hjust = 0.5, face = "bold", size = 14, color = th$text),
+    plot.subtitle     = element_text(hjust = 0.5, size = 10, color = th$text),
+    legend.position   = "none",
+    panel.spacing     = unit(0.8, "lines")
+  )
+
+  
+```
+### smoothed
+```{r smoothed}
+theme_choice <- "Yankees"
+th <- map_themes[[theme_choice]]
+
+bardat<-filt_monthly
+# 1️⃣ Calculate slope & p-value per type
+trend_stats <- filt_monthly %>%
+  group_by(type) %>%
+  summarise(
+    model = list(lm(total ~ month, data = cur_data())),
+    .groups = "drop"
+  ) %>%
+  mutate(
+    slope_val = sapply(model, function(m) coef(m)["month"]),
+    pval_val  = sapply(model, function(m) summary(m)$coefficients["month", "Pr(>|t|)"]),
+    
+    # Conditional formatting for slope
+    slope_fmt = ifelse(
+      abs(slope_val) < 0.01,
+      formatC(slope_val, format = "e", digits = 2),  # scientific notation
+      round(slope_val, 2)                             # normal rounding
+    ),
+    
+    # Conditional formatting for p-value
+    pval_fmt = ifelse(
+      pval_val < 0.01,
+      formatC(pval_val, format = "e", digits = 2),
+      signif(pval_val, 2)
+    ),
+    
+    # Create facet label text
+    label_text = paste0(type, " (slope = ", slope_fmt, ", p = ", pval_fmt, ")")
+  )
+
+
+# 2️⃣ Make a named vector for labeller
+facet_labels <- setNames(trend_stats$label_text, trend_stats$type)
+
+# 3️⃣ Plot with facet_wrap using custom labels
+ggplot(bardat, aes(x = month, y = total, fill = type)) +
+  # geom_col(width = 25, alpha = 0.75) +
+  geom_line(aes(y = roll6, color = type), linewidth = 1.1) +
+  geom_smooth(aes(y = total), method = "lm", se = TRUE, linetype = "dashed", color=th$text, linewidth = 0.8) +
+  facet_wrap(~type, scales = "free_y", ncol = 1, strip.position = "top",
+             labeller = labeller(type = facet_labels)) +
+  scale_fill_manual(values = c("injured" = th$injury_point, "killed" = th$fatal_point)) +
+  scale_color_manual(values = c("injured" = th$injury_point, "killed" = th$fatal_point)) +
+  scale_x_date(date_breaks = "1 year", date_labels = "%Y") +
+  labs(
+    title = "Monthly Cyclist Injuries & Fatalities with Trendline",
+    x = "Year",
+    y = "Cyclists per Month"
+  ) +
+  theme_minimal(base_size = 10) +
+  theme(
+    plot.background  = element_rect(fill = th$bg, color = NA),
+    panel.background = element_rect(fill = th$bg, color = NA),
+    panel.grid.major  = element_line(color = scales::alpha(th$text, 0.2)),
+    panel.grid.minor  = element_blank(),
+    strip.background  = element_rect(fill = scales::alpha(th$bg, 0.5), color = NA),
+    strip.text        = element_text(face = "bold", size = 12, color = th$text),
+    axis.text         = element_text(color = th$text, size = 9),
+    axis.title        = element_text(color = th$text),
+    plot.title        = element_text(hjust = 0.5, face = "bold", size = 14, color = th$text),
+    plot.subtitle     = element_text(hjust = 0.5, size = 10, color = th$text),
+    legend.position   = "none",
+    panel.spacing     = unit(0.8, "lines")
+  )
+
+
+```
+```{r}
+kill_trend <- filt_monthly %>%
+  filter(type == "killed")
+
+model <- lm(total ~ month, data = kill_trend)
+summary(model)
+
+```
+
+
+
+## rejected data
+``` {r rej bar}
+
+# --- Faceted bar plot with rolling mean overlay ---
+
+bardat<-rej_monthly
+
+
+# Assume `theme_choice` is one of "Dark", "Mets", "Yankees"
+theme_choice <- "Mets"
+th <- map_themes[[theme_choice]]
+
+
+# 1️⃣ Calculate slope & p-value per type
+trend_stats <- bardat %>%
+  group_by(type) %>%
+  summarise(
+    model = list(lm(total ~ month, data = cur_data())),
+    .groups = "drop"
+  ) %>%
+  mutate(
+    slope_val = sapply(model, function(m) coef(m)["month"]),
+    pval_val  = sapply(model, function(m) summary(m)$coefficients["month", "Pr(>|t|)"]),
+    
+    # Conditional formatting for slope
+    slope_fmt = ifelse(
+      abs(slope_val) < 0.01,
+      formatC(slope_val, format = "e", digits = 2),  # scientific notation
+      round(slope_val, 2)                             # normal rounding
+    ),
+    
+    # Conditional formatting for p-value
+    pval_fmt = ifelse(
+      pval_val < 0.01,
+      formatC(pval_val, format = "e", digits = 2),
+      signif(pval_val, 2)
+    ),
+    
+    # Create facet label text
+    label_text = paste0(type, " (slope = ", slope_fmt, ", p = ", pval_fmt, ")")
+  )
+
+
+# 2️⃣ Make a named vector for labeller
+facet_labels <- setNames(trend_stats$label_text, trend_stats$type)
+
+# 3️⃣ Plot with facet_wrap using custom labels
+ggplot(bardat, aes(x = month, y = total, fill = type)) +
+  # geom_col(width = 25, alpha = 0.75) +
+  geom_line(aes(y = roll6, color = type), linewidth = 1.1) +
+  geom_smooth(aes(y = total), method = "lm", se = TRUE, linetype = "dashed", color=th$text, linewidth = 0.8) +
+  facet_wrap(~type, scales = "free_y", ncol = 1, strip.position = "top",
+             labeller = labeller(type = facet_labels)) +
+  scale_fill_manual(values = c("injured" = th$injury_point, "killed" = th$fatal_point)) +
+  scale_color_manual(values = c("injured" = th$injury_point, "killed" = th$fatal_point)) +
+  scale_x_date(date_breaks = "1 year", date_labels = "%Y") +
+  labs(
+    title = "Monthly Cyclist Injuries & Fatalities with Trendline",
+    x = "Year",
+    y = "Cyclists per Month"
+  ) +
+  theme_minimal(base_size = 10) +
+  theme(
+    plot.background  = element_rect(fill = th$bg, color = NA),
+    panel.background = element_rect(fill = th$bg, color = NA),
+    panel.grid.major  = element_line(color = scales::alpha(th$text, 0.2)),
+    panel.grid.minor  = element_blank(),
+    strip.background  = element_rect(fill = scales::alpha(th$bg, 0.5), color = NA),
+    strip.text        = element_text(face = "bold", size = 12, color = th$text),
+    axis.text         = element_text(color = th$text, size = 9),
+    axis.title        = element_text(color = th$text),
+    plot.title        = element_text(hjust = 0.5, face = "bold", size = 14, color = th$text),
+    plot.subtitle     = element_text(hjust = 0.5, size = 10, color = th$text),
+    legend.position   = "none",
+    panel.spacing     = unit(0.8, "lines")
+  )
+
+
+
+  
+```
+
+
+
+# Maps
+
+
+
+
+
+## helpers
+```{r helpers}
+# -------------------------------------------------------------------------
+# Simple helpers: convert filtered -> sf and coordinate df for density
+# -------------------------------------------------------------------------
+# Expect `filtered` to be present: columns date, lat, lon, injured, killed
+# Example check:
+if (!exists("filtered")) {
+  stop("Please provide an object `filtered` with columns: date, lat, lon, injured, killed")
+}
+
+# Make a small safe copy and ensure types
+filtered <- filtered %>%
+  dplyr::rename(
+    .date = date,
+    .lat  = lat,
+    .lon  = lon
+  ) %>% 
+  mutate(
+    date = as.Date(.date),
+    lat  = as.numeric(.lat),
+    lon  = as.numeric(.lon),
+    injured = as.integer(injured),
+    killed  = as.integer(killed)
+  ) %>%
+  select(date, lat, lon, injured, killed)
+
+# Create an sf points object (preserves lon/lat columns for density routines)
+pts_sf <- sf::st_as_sf(filtered, coords = c("lon", "lat"), crs = 4326, remove = FALSE)
+
+# Create coordinate dataframe for density calculations (keeps numeric coords)
+coords_df <- filtered %>% select(lon, lat, injured, killed)
+```
+
+
+
+## make_point_map() 
+```{r new point map function}
+make_point_map <- function(filtered_sf,
+                           theme_choice = c("Dark", "Mets", "Yankees"),
+                           show_injuries = TRUE,
+                           show_fatalities = TRUE,
+                           title = "NYC Cyclist Injuries & Fatalities",
+                           size_mode = c("auto", "small", "medium", "large"),
+                           output_width = NULL,
+                           zoomin_override = NULL,
+                           injury_size = NULL,
+                           fatal_size = NULL,
+                           alpha = NULL,
+                           dates = TRUE) {  # <- NEW ARG
+  
+  theme_choice <- match.arg(theme_choice)
+  size_mode <- match.arg(size_mode)
+  th <- map_themes[[theme_choice]]
+  
+  #-------------------------------------------------------------
+  # ADAPTIVE PARAMETER SCALING # 
+  #-------------------------------------------------------------
+  if (size_mode == "auto" && !is.null(output_width)) {
+    scale_factor <- (output_width / 20)
+    injury_size  <- injury_size  %||% (0.3 * scale_factor)
+    fatal_size   <- fatal_size   %||% (0.5 * scale_factor)
+    alpha        <- alpha        %||% (0.02 * scale_factor)
+    
+    # dynamic basemap zoom control
+    zoom_adj <- dplyr::case_when(
+      output_width < 4 ~ -2,
+      output_width < 6 ~ -1,
+      output_width < 10 ~ 0,
+      TRUE ~ 1
+    )
+    zoomin <- zoomin_override %||% zoom_adj
+  } else {
+    params <- switch(size_mode,
+      small  = list(zoomin = -1, injury_size = 0.3, fatal_size = 0.5, alpha = 0.01),
+      medium = list(zoomin =  0, injury_size = 0.7, fatal_size = 1.0, alpha = 0.01),
+      large  = list(zoomin =  1, injury_size = 0.7, fatal_size = 0.9, alpha = 0.03)
+    )
+    zoomin      <- zoomin_override %||% params$zoomin
+    injury_size <- injury_size  %||% params$injury_size
+    fatal_size  <- fatal_size   %||% params$fatal_size
+    alpha       <- alpha        %||% params$alpha
+  }
+  
+  #-------------------------------------------------------------
+  # DATE RANGE (if available)
+  #-------------------------------------------------------------
+  subtitle_text <- NULL
+  if (dates && "date" %in% names(filtered_sf)) {
+    min_date <- min(filtered_sf$date, na.rm = TRUE)
+    max_date <- max(filtered_sf$date, na.rm = TRUE)
+    
+    # Format: "Jan 01, 2020 to Dec 31, 2024"
+    subtitle_text <- paste(
+      format(min_date, "%b %d, %Y"),
+      "to",
+      format(max_date, "%b %d, %Y")
+    )
+  }
+  
+  #-------------------------------------------------------------
+  # COMBINE DATA
+  #-------------------------------------------------------------
+  plot_data <- filtered_sf %>%
+    dplyr::mutate(
+      type = dplyr::case_when(
+        killed  > 0 & show_fatalities ~ "Killed",
+        injured > 0 & show_injuries   ~ "Injured",
+        TRUE ~ NA_character_
+      )
+    ) %>%
+    dplyr::filter(!is.na(type))
+  
+  legend_levels <- unique(plot_data$type)
+  legend_colors <- c(
+    "Injured" = th$injury_point,
+    "Killed"  = th$fatal_point
+  )[legend_levels]
+  
+  #-------------------------------------------------------------
+  # BASE MAP
+  #-------------------------------------------------------------
+  p <- ggplot() +
+    ggspatial::annotation_map_tile(
+      type = th$tile_type,
+      zoomin = zoomin,
+      cachedir = tempdir()
+    )
+  
+  #-------------------------------------------------------------
+  # LAYERS
+  #-------------------------------------------------------------
+  if (show_injuries) {
+    p <- p +
+      geom_sf(
+        data = filtered_sf %>% filter(injured > 0),
+        inherit.aes = FALSE,
+        aes(geometry = geometry, color = "Injured"),
+        size = injury_size,
+        alpha = alpha
+      )
+  }
+  
+  if (show_fatalities) {
+    p <- p +
+      geom_sf(
+        data = filtered_sf %>% filter(killed > 0),
+        inherit.aes = FALSE,
+        aes(geometry = geometry, color = "Killed"),
+        size = fatal_size,
+        alpha = 1   # fixed alpha for fatalities
+      )
+  }
+  
+  #-------------------------------------------------------------
+  # DECORATION + LEGEND
+  #-------------------------------------------------------------
+  p <- p +
+    ggspatial::annotation_scale(
+      location = "bl",
+      text_col = th$text,
+      line_col = th$text,
+      width_hint = 0.25,
+      style = "bar"
+    ) +
+    ggspatial::annotation_north_arrow(
+      location = "br",
+      which_north = "true",
+      style = ggspatial::north_arrow_orienteering(
+        line_col = th$text,
+        text_col = th$text
+      )
+    ) +
+    scale_color_manual(
+      name = NULL,
+      values = legend_colors,
+      breaks = legend_levels,
+      guide = guide_legend(
+        override.aes = list(
+          size = c(injury_size * 3, fatal_size * 3)[seq_along(legend_levels)],
+          alpha = c(1, 1)[seq_along(legend_levels)]
+        )
+      )
+    ) +
+    coord_sf(expand = FALSE) +
+    theme_minimal(base_size = 10) +
+    theme(
+      plot.background  = element_rect(fill = th$bg, color = NA),
+      panel.background = element_rect(fill = th$bg, color = NA),
+      panel.grid = element_blank(),
+      axis.title = element_blank(),
+      axis.text  = element_text(color = scales::alpha(th$text, 0.85), size = 8),
+      axis.ticks = element_line(color = scales::alpha(th$text, 0.7), size = 0.2),
+      plot.title = element_text(color = th$text, hjust = 0.5, face = "bold", size = 14),
+      plot.subtitle = element_text(color = th$text, hjust = 0.5, size = 9, margin = margin(t = 4)),
+      plot.caption = element_text(color = th$text, size = 8, hjust = 1),
+      legend.position = "top",
+      legend.background = element_rect(fill = scales::alpha(th$bg, 0.6), color = NA),
+      legend.text = element_text(color = th$text, size = 9)
+    ) +
+    labs(
+      title = title,
+      subtitle = subtitle_text,  # <- NEW
+      caption = " 2025 | Tiles: CARTO | Data: NYPD Open Data"
+    )
+  
+  return(p)
+}
+
+
+```
+
+
+
+
+
+# Points
+
+# 1) Points 
+```{r}
+p_small8_5 <- make_point_map(pts_sf, "Dark", size_mode = "small", output_width = 8)
+ggsave("products/small8_5.png", p_small8_5, width = 5, height = 5, dpi = 300)
+
+p_mobile_aut <- make_point_map(pts_sf, "Dark", size_mode = "auto", output_width = 8)
+ggsave("products/auto8.png", p_mobile_aut, width = 4, height = 4, dpi = 150)
+
+p_auto10 <- make_point_map(pts_sf, "Dark", size_mode = "auto", output_width = 10)
+ggsave("products/auto10.png", p_auto10, width = 10, height = 10, dpi = 300)
+
+p_auto16_10 <- make_point_map(pts_sf, "Dark", size_mode = "auto", output_width = 16)
+ggsave("products/auto16.png", p_auto16_10, width = 10, height = 10, dpi = 300)
+
+p_large12 <- make_point_map(pts_sf, "Dark", size_mode = "large")
+ggsave("products/large12.png", p_large12, width = 12, height = 12, dpi = 300)
+
+
+p_auto20 <- make_point_map(pts_sf, "Dark", size_mode = "auto", output_width = 20)
+ggsave("products/points_20_12.png", p_auto20, width = 12, height = 12, dpi = 300)
+
+
+```
+

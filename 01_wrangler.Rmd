@@ -49,28 +49,59 @@ crashfilt<-crashdat%>%
            lon!=0,
            lat!=0)
 
+write_csv(crashfilt, "data/crashfilt.csv")
+
 #rejected data
+crashrej<-crashdat%>%
+    filter(is.na(lat)| 
+           is.na(lon)| 
+           is.na(date)|
+           lon==0|
+           lat==0)
 
-```
-
-```{r review}
-
-# review
-crashfilt%>%
-  select(date)%>%
-  summary()
-
-
-crashfilt%>%
-  filter(lon==0)
+write_csv(crashrej, "data/crashrej.csv")
 
 
 ```
 
+```{r rej review}
+rejected<-crashrej%>%
+  select(date, time, lat, lon, injured=cycle_inj, killed=cycle_kill, street, cross)
+
+
+
+```
+
+
+
+```{r reject summary}
+rejsumm<-crashrej%>%
+    select(date, time, lat, lon, injured=cycle_inj, killed=cycle_kill, street, cross)%>%
+  summarize(injured=sum(injured), killed=sum(killed))
+
+
+monthly_rejects<-rejsumm%>%
+    select(date, time, lat, lon, injured=cycle_inj, killed=cycle_kill, street, cross)%>%
+    mutate(
+    date  = as.Date(date),
+    month = as.numeric(format(date, "%m")), 
+    year = as.numeric(format(date,"%y"))
+    )%>%
+  group_by(year, month)%>%
+  summarize(injured=sum(injured), killed=sum(killed))%>%
+  ungroup()%>%
+  mutate(monthyear=paste0(year,"-",month))%>%
+  select(monthyear, injured, killed)%>%
+  pivot_longer(cols = c(injured, killed), names_to = "type")
+
+
+```
 
 
 
 
+
+# app filter
 ```{r app filter}
 #strip down to minimal for shiny app
 appdat<-crashfilt%>%
@@ -84,12 +115,12 @@ appdat<-crashfilt%>%
     # Clean and title-case street names
     street = street %>%
       str_trim() %>%
-      na_if("") %>%
+      # na_if("") %>%
       str_to_title(),
     
     cross = cross %>%
       str_trim() %>%
-      na_if("") %>%
+      # na_if("") %>%
       str_to_title()
   ) %>%
   mutate(
@@ -98,8 +129,8 @@ appdat<-crashfilt%>%
       fancydate,
       injured,
       killed,
-      ifelse(street != "", paste0("<br><b>Street:</b> ", street), ""),
-      ifelse(cross != "", paste0("<br><b>Cross:</b> ", cross), "")
+      ifelse(street != ""&!is.na(street), paste0("<br><b>Street:</b> ", street), ""),
+      ifelse(cross != ""&!is.na(cross), paste0("<br><b>Cross:</b> ", cross), "")
     )
   )
 
@@ -152,27 +183,44 @@ appdat%>%
 ```
 
 
-# Static maps
 
 
-```{r maps}
-
-library(sf)
-
-# assuming your data is in a data.frame called df
-# with columns lat, lon, injured, killed
+# Viridis pallete viewer
 
 
-map_df<-appdat
+```{r pallete checker}
+library(viridis)
 
-# convert to sf object
-df_sf <- st_as_sf(map_df, coords = c("lon", "lat"), crs = 4326)
 
-ggplot() +
-  geom_sf(data = df_sf[map_df$injured > 0,], aes(color = "Injury"), alpha = 0.7, size = 2) +
-  geom_sf(data = df_sf[map_df$killed > 0,], aes(color = "Fatality"), alpha = 0.9, size = 3, shape = 4) +
-  scale_color_manual(values = c("Injury" = "limegreen", "Fatality" = "hotpink")) +
-  theme_minimal() +
-  theme(panel.background = element_rect(fill = "black"))
+# Palette codes and names
+pal_codes <- c("A","B","C","D","E","F")
+pal_names <- c("Viridis","Magma","Plasma","Inferno","Cividis","Rocket")
+
+# Number of colors per palette
+n_colors <- 7
+
+# Build a data frame with palette code, name, color, and position
+pal_list <- lapply(seq_along(pal_codes), function(i) {
+  data.frame(
+    Code = pal_codes[i],
+    Name = pal_names[i],
+    Color = viridis(n_colors, option = pal_codes[i]),
+    Position = seq_len(n_colors),
+    stringsAsFactors = FALSE
+  )
+})
+
+pal_df <- do.call(rbind, pal_list)
+
+# Plot swatches
+ggplot(pal_df, aes(x = Position, y = 1, fill = Color)) +
+  geom_tile() +
+  facet_wrap(~paste(Code, Name), ncol = 1, strip.position = "left") +
+  scale_fill_identity() +
+  theme_void() +
+  theme(strip.text = element_text(face = "bold", size = 12))
+
+
+
 
 ```
