@@ -1,0 +1,1 @@
+Welcome aboard! This is a little project I've undertaken to serve a community that I was proud and excited to be a part of for many years. The code here visualizes publicly-available collision data from New York City, depicting incidents in which cyclists were injured or killed.   
